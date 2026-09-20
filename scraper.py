@@ -29,8 +29,8 @@ STORES = {
 DUTCHIE_GRAPHQL_URL = "https://dutchie.com/graphql"
 
 query = """
-query GetFilteredProducts($storeId: ID!, $filter: FilterInput) {
-  filteredProducts(storeId: $storeId, filter: $filter) {
+query GetFilteredProducts($storeId: ID!, $filter: FilterInput, $page: Int, $perPage: Int) {
+  filteredProducts(storeId: $storeId, filter: $filter, page: $page, perPage: $perPage) {
     id
     name
     category
@@ -48,35 +48,34 @@ query GetFilteredProducts($storeId: ID!, $filter: FilterInput) {
 
 all_products = []
 
-# Initialize session with full browser impersonation
 session = requests.Session(impersonate="chrome")
 
-# Step 1: Hit home page to obtain Cloudflare session cookies
-print("Initial connection setup...")
+print("Initializing Dutchie session cookies...")
 try:
     init_headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-        "Accept-Language": "en-US,en;q=0.9",
     }
     session.get("https://dutchie.com", headers=init_headers, timeout=15)
     time.sleep(2)
 except Exception as e:
     print(f"Session init notice: {e}")
 
-# Step 2: Loop through stores using established session
 for store_name, store_id in STORES.items():
-    variables = {
-        "storeId": store_id,
-        "filter": {}
-    }
-    
     headers = {
         "Accept": "*/*",
         "Content-Type": "application/json",
         "Origin": "https://dutchie.com",
         "Referer": f"https://dutchie.com/embedded-menu/{store_id}",
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+    }
+
+    # Fetch up to 500 products per dispensary
+    variables = {
+        "storeId": store_id,
+        "filter": {},
+        "page": 0,
+        "perPage": 500
     }
 
     try:
@@ -121,10 +120,9 @@ for store_name, store_id in STORES.items():
         
     time.sleep(1)
 
-# Step 3: Write out results
 if len(all_products) > 0:
     df = pd.DataFrame(all_products)
     df.to_csv("daily_menu.csv", index=False)
-    print(f"SUCCESS: Saved {len(df)} live products to daily_menu.csv!")
+    print(f"SUCCESS: Saved {len(df)} total live products to daily_menu.csv!")
 else:
     print("WARNING: Zero items fetched. File unchanged.")
