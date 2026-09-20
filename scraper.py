@@ -1,7 +1,7 @@
-import requests
 import pandas as pd
 import json
 import time
+from curl_cffi import requests
 
 STORES = {
     # River North & Downtown
@@ -26,83 +26,91 @@ STORES = {
     "Ascend - Midway": "60803e480df24c00bdf1950e"
 }
 
-headers = {
-    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
-    "Accept": "application/json",
-    "Accept-Language": "en-US,en;q=0.9",
-    "Origin": "https://dutchie.com",
-    "Referer": "https://dutchie.com/"
-}
+DUTCHIE_GRAPHQL_URL = "https://dutchie.com/graphql"
 
-# Payload targeting consumer REST/Filtered endpoint
+query = """
+query GetFilteredProducts($storeId: ID!, $filter: FilterInput) {
+  filteredProducts(storeId: $storeId, filter: $filter) {
+    id
+    name
+    category
+    brand {
+      name
+    }
+    variants {
+      option
+      priceRec
+      specialPriceRec
+    }
+  }
+}
+"""
+
 all_products = []
 
+# Using Chrome impersonation to bypass Cloudflare
+session = requests.Session(impersonate="chrome120")
+
 for store_name, store_id in STORES.items():
-    url = f"https://dutchie.com/api/v2/embedded-menu/{store_id}/products"
+    variables = {
+        "storeId": store_id,
+        "filter": {}
+    }
     
+    headers = {
+        "accept": "*/*",
+        "content-type": "application/json",
+        "origin": "https://dutchie.com",
+        "referer": f"https://dutchie.com/embedded-menu/{store_id}",
+        "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    }
+
     try:
-        res = requests.get(url, headers=headers, timeout=15)
+        res = session.post(
+            DUTCHIE_GRAPHQL_URL, 
+            json={'query': query, 'variables': variables}, 
+            headers=headers, 
+            timeout=15
+        )
         
         if res.status_code == 200:
-            products = res.json()
-            if isinstance(products, list):
-                print(f"[{store_name}] Successfully fetched {len(products)} products")
+            data = res.json()
+            products = data.get('data', {}).get('filteredProducts', []) or []
+            print(f"[{store_name}] Fetched {len(products)} products")
+            
+            for p in products:
+                brand_obj = p.get('brand')
+                brand = brand_obj.get('name') if isinstance(brand_obj, dict) else 'Unknown Brand'
+                category = p.get('category', 'Other')
                 
-                for p in products:
-                    brand = p.get('brand', {}).get('name', 'Unknown Brand') if isinstance(p.get('brand'), dict) else p.get('brandName', 'Unknown Brand')
-                    category = p.get('category', 'Other')
+                variants = p.get('variants', []) or []
+                for v in variants:
+                    reg_price = v.get('priceRec', 0) or 0
+                    special_price = v.get('specialPriceRec')
+                    effective_price = special_price if special_price is not None else reg_price
                     
-                    variants = p.get('variants', []) or []
-                    if not variants:
-                        reg_price = p.get('priceRec', 0) or p.get('unitPrice', 0)
-                        special_price = p.get('specialPriceRec')
-                        effective_price = special_price if special_price is not None else reg_price
-                        
-                        all_products.append({
-                            "Dispensary": store_name,
-                            "Brand": brand,
-                            "Product": p.get('name', 'Unknown'),
-                            "Category": category,
-                            "Option": "Standard",
-                            "Price ($)": float(effective_price),
-                            "Reg Price ($)": float(reg_price),
-                            "On Sale": "Yes" if special_price is not None else "No"
-                        })
-                    else:
-                        for v in variants:
-                            reg_price = v.get('priceRec', 0) or v.get('price', 0)
-                            special_price = v.get('specialPriceRec') or v.get('specialPrice')
-                            effective_price = special_price if special_price is not None else reg_price
-                            
-                            all_products.append({
-                                "Dispensary": store_name,
-                                "Brand": brand,
-                                "Product": p.get('name', 'Unknown'),
-                                "Category": category,
-                                "Option": v.get('option', 'N/A'),
-                                "Price ($)": float(effective_price),
-                                "Reg Price ($)": float(reg_price),
-                                "On Sale": "Yes" if special_price is not None else "No"
-                            })
-            else:
-                print(f"[{store_name}] Response was not a list.")
+                    all_products.append({
+                        "Dispensary": store_name,
+                        "Brand": brand,
+                        "Product": p.get('name', 'Unknown'),
+                        "Category": category,
+                        "Option": v.get('option', 'N/A'),
+                        "Price ($)": float(effective_price),
+                        "Reg Price ($)": float(reg_price),
+                        "On Sale": "Yes" if special_price is not None else "No"
+                    })
         else:
-            print(f"[{store_name}] Status Code {res.status_code}")
+            print(f"[{store_name}] HTTP {res.status_code}")
             
     except Exception as e:
         print(f"[{store_name}] Error: {e}")
         
-    time.sleep(1) # Courteous delay between menu requests
+    time.sleep(1)
 
-# Final check
-if len(all_products) == 0:
-    print("Warning: Embedded menu API blocked. Retrying standard query setup.")
-    all_products = [
-        {"Dispensary": "Sunnyside - River North", "Brand": "Cresco", "Product": "Gas Station Sushi Flower 3.5g", "Category": "Flower", "Option": "3.5g", "Price ($)": 50.0, "Reg Price ($)": 60.0, "On Sale": "Yes"},
-        {"Dispensary": "Curaleaf - West Loop", "Brand": "Grassroots", "Product": "Motorbreath #15 Live Rosin 1g", "Category": "Concentrate", "Option": "1g", "Price ($)": 60.0, "Reg Price ($)": 60.0, "On Sale": "No"},
-        {"Dispensary": "Ivy Hall - Bucktown", "Brand": "IC Collective", "Product": "Runtz x Gelato Cartridge", "Category": "Vape", "Option": "0.5g", "Price ($)": 45.0, "Reg Price ($)": 55.0, "On Sale": "Yes"},
-    ]
-
-df = pd.DataFrame(all_products)
-df.to_csv("daily_menu.csv", index=False)
-print(f"Saved total {len(df)} records to daily_menu.csv")
+# Only save if we actually pulled real store data
+if len(all_products) > 0:
+    df = pd.DataFrame(all_products)
+    df.to_csv("daily_menu.csv", index=False)
+    print(f"Successfully saved {len(df)} live products to daily_menu.csv")
+else:
+    print("Failed to pull live store data. File not updated.")
