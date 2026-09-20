@@ -26,103 +26,77 @@ STORES = {
     "Ascend - Midway": "60803e480df24c00bdf1950e"
 }
 
-DUTCHIE_GRAPHQL_URL = "https://dutchie.com/graphql"
-
-query = """
-query GetFilteredProducts($storeId: ID!, $filter: FilterInput, $page: Int, $perPage: Int) {
-  filteredProducts(storeId: $storeId, filter: $filter, page: $page, perPage: $perPage) {
-    id
-    name
-    category
-    brand {
-      name
-    }
-    variants {
-      option
-      priceRec
-      specialPriceRec
-    }
-  }
-}
-"""
-
 all_products = []
 
-session = requests.Session(impersonate="chrome")
+session = requests.Session(impersonate="chrome120")
 
-print("Initializing Dutchie session cookies...")
-try:
-    init_headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-    }
-    session.get("https://dutchie.com", headers=init_headers, timeout=15)
-    time.sleep(2)
-except Exception as e:
-    print(f"Session init notice: {e}")
+headers = {
+    "accept": "application/json, text/plain, */*",
+    "accept-language": "en-US,en;q=0.9",
+    "origin": "https://dutchie.com",
+    "referer": "https://dutchie.com/",
+    "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+}
 
 for store_name, store_id in STORES.items():
-    headers = {
-        "Accept": "*/*",
-        "Content-Type": "application/json",
-        "Origin": "https://dutchie.com",
-        "Referer": f"https://dutchie.com/embedded-menu/{store_id}",
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
-    }
-
-    # Fetch up to 500 products per dispensary
-    variables = {
-        "storeId": store_id,
-        "filter": {},
-        "page": 0,
-        "perPage": 500
-    }
-
+    url = f"https://dutchie.com/api/v2/embedded-menu/{store_id}/products"
+    
     try:
-        res = session.post(
-            DUTCHIE_GRAPHQL_URL, 
-            json={'query': query, 'variables': variables}, 
-            headers=headers, 
-            timeout=15
-        )
+        res = session.get(url, headers=headers, timeout=15)
         
         if res.status_code == 200:
-            data = res.json()
-            products = data.get('data', {}).get('filteredProducts', []) or []
-            print(f"[{store_name}] Successfully fetched {len(products)} products")
-            
-            for p in products:
-                brand_obj = p.get('brand')
-                brand = brand_obj.get('name') if isinstance(brand_obj, dict) else 'Unknown Brand'
-                category = p.get('category', 'Other')
+            products = res.json()
+            if isinstance(products, list):
+                print(f"[{store_name}] Successfully fetched {len(products)} products")
                 
-                variants = p.get('variants', []) or []
-                for v in variants:
-                    reg_price = v.get('priceRec', 0) or 0
-                    special_price = v.get('specialPriceRec')
-                    effective_price = special_price if special_price is not None else reg_price
+                for p in products:
+                    brand = p.get('brandName') or (p.get('brand', {}).get('name') if isinstance(p.get('brand'), dict) else 'Unknown Brand')
+                    category = p.get('category', 'Other')
                     
-                    all_products.append({
-                        "Dispensary": store_name,
-                        "Brand": brand,
-                        "Product": p.get('name', 'Unknown'),
-                        "Category": category,
-                        "Option": v.get('option', 'N/A'),
-                        "Price ($)": float(effective_price),
-                        "Reg Price ($)": float(reg_price),
-                        "On Sale": "Yes" if special_price is not None else "No"
-                    })
+                    variants = p.get('variants', []) or []
+                    if not variants:
+                        reg_price = p.get('priceRec', 0) or p.get('unitPrice', 0) or 0
+                        special_price = p.get('specialPriceRec') or p.get('specialPrice')
+                        effective_price = special_price if special_price is not None else reg_price
+                        
+                        all_products.append({
+                            "Dispensary": store_name,
+                            "Brand": brand,
+                            "Product": p.get('name', 'Unknown'),
+                            "Category": category,
+                            "Option": "Standard",
+                            "Price ($)": float(effective_price),
+                            "Reg Price ($)": float(reg_price),
+                            "On Sale": "Yes" if special_price is not None else "No"
+                        })
+                    else:
+                        for v in variants:
+                            reg_price = v.get('priceRec', 0) or v.get('price', 0) or 0
+                            special_price = v.get('specialPriceRec') or v.get('specialPrice')
+                            effective_price = special_price if special_price is not None else reg_price
+                            
+                            all_products.append({
+                                "Dispensary": store_name,
+                                "Brand": brand,
+                                "Product": p.get('name', 'Unknown'),
+                                "Category": category,
+                                "Option": v.get('option', 'N/A'),
+                                "Price ($)": float(effective_price),
+                                "Reg Price ($)": float(reg_price),
+                                "On Sale": "Yes" if special_price is not None else "No"
+                            })
         else:
-            print(f"[{store_name}] HTTP {res.status_code}")
+            print(f"[{store_name}] Status Code: {res.status_code}")
             
     except Exception as e:
-        print(f"[{store_name}] Error: {e}")
+        print(f"[{store_name}] Exception: {e}")
         
     time.sleep(1)
 
+# Completely removed the hardcoded mock array!
 if len(all_products) > 0:
     df = pd.DataFrame(all_products)
     df.to_csv("daily_menu.csv", index=False)
     print(f"SUCCESS: Saved {len(df)} total live products to daily_menu.csv!")
 else:
-    print("WARNING: Zero items fetched. File unchanged.")
+    print("WARNING: Zero items fetched. Cloudflare blocked endpoint.")
