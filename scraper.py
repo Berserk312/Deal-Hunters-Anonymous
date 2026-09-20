@@ -1,7 +1,7 @@
 import pandas as pd
 import json
 import time
-from curl_cffi import requests
+from playwright.sync_api import sync_playwright
 
 STORES = {
     # River North & Downtown
@@ -28,75 +28,77 @@ STORES = {
 
 all_products = []
 
-session = requests.Session(impersonate="chrome120")
+with sync_playwright() as p:
+    # Launch real headless Chromium browser
+    browser = p.chromium.launch(headless=True)
+    context = browser.new_context(
+        user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+    )
+    page = context.new_page()
 
-headers = {
-    "accept": "application/json, text/plain, */*",
-    "accept-language": "en-US,en;q=0.9",
-    "origin": "https://dutchie.com",
-    "referer": "https://dutchie.com/",
-    "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-}
+    for store_name, store_id in STORES.items():
+        url = f"https://dutchie.com/embedded-menu/{store_id}"
+        print(f"[{store_name}] Loading page...")
 
-for store_name, store_id in STORES.items():
-    url = f"https://dutchie.com/api/v2/embedded-menu/{store_id}/products"
-    
-    try:
-        res = session.get(url, headers=headers, timeout=15)
-        
-        if res.status_code == 200:
-            products = res.json()
-            if isinstance(products, list):
-                print(f"[{store_name}] Successfully fetched {len(products)} products")
-                
-                for p in products:
-                    brand = p.get('brandName') or (p.get('brand', {}).get('name') if isinstance(p.get('brand'), dict) else 'Unknown Brand')
-                    category = p.get('category', 'Other')
-                    
-                    variants = p.get('variants', []) or []
-                    if not variants:
-                        reg_price = p.get('priceRec', 0) or p.get('unitPrice', 0) or 0
-                        special_price = p.get('specialPriceRec') or p.get('specialPrice')
-                        effective_price = special_price if special_price is not None else reg_price
-                        
-                        all_products.append({
-                            "Dispensary": store_name,
-                            "Brand": brand,
-                            "Product": p.get('name', 'Unknown'),
-                            "Category": category,
-                            "Option": "Standard",
-                            "Price ($)": float(effective_price),
-                            "Reg Price ($)": float(reg_price),
-                            "On Sale": "Yes" if special_price is not None else "No"
-                        })
-                    else:
-                        for v in variants:
-                            reg_price = v.get('priceRec', 0) or v.get('price', 0) or 0
-                            special_price = v.get('specialPriceRec') or v.get('specialPrice')
-                            effective_price = special_price if special_price is not None else reg_price
-                            
-                            all_products.append({
-                                "Dispensary": store_name,
-                                "Brand": brand,
-                                "Product": p.get('name', 'Unknown'),
-                                "Category": category,
-                                "Option": v.get('option', 'N/A'),
-                                "Price ($)": float(effective_price),
-                                "Reg Price ($)": float(reg_price),
-                                "On Sale": "Yes" if special_price is not None else "No"
-                            })
-        else:
-            print(f"[{store_name}] Status Code: {res.status_code}")
-            
-    except Exception as e:
-        print(f"[{store_name}] Exception: {e}")
-        
-    time.sleep(1)
+        try:
+            # Go directly to the embedded menu page to pass Cloudflare checks
+            page.goto(url, wait_until="domcontentloaded", timeout=30000)
+            time.sleep(3)
 
-# Completely removed the hardcoded mock array!
+            # Execute GraphQL fetch inside the authenticated browser context
+            graphql_query = """
+            async (storeId) => {
+                const res = await fetch('https://dutchie.com/graphql', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        query: `query GetFilteredProducts($storeId: ID!) {
+                            filteredProducts(storeId: $storeId) {
+                                name
+                                category
+                                brand { name }
+                                variants { option priceRec specialPriceRec }
+                            }
+                        }`,
+                        variables: { storeId: storeId }
+                    })
+                });
+                return await res.json();
+            }
+            """
+
+            result = page.evaluate(graphql_query, store_id)
+            products = result.get('data', {}).get('filteredProducts', []) or []
+            print(f"[{store_name}] Successfully fetched {len(products)} live products")
+
+            for item in products:
+                brand = item.get('brand', {}).get('name', 'Unknown Brand') if isinstance(item.get('brand'), dict) else 'Unknown Brand'
+                category = item.get('category', 'Other')
+
+                for v in item.get('variants', []) or []:
+                    reg_price = v.get('priceRec', 0) or 0
+                    special_price = v.get('specialPriceRec')
+                    effective_price = special_price if special_price is not None else reg_price
+
+                    all_products.append({
+                        "Dispensary": store_name,
+                        "Brand": brand,
+                        "Product": item.get('name', 'Unknown'),
+                        "Category": category,
+                        "Option": v.get('option', 'N/A'),
+                        "Price ($)": float(effective_price),
+                        "Reg Price ($)": float(reg_price),
+                        "On Sale": "Yes" if special_price is not None else "No"
+                    })
+
+        except Exception as e:
+            print(f"[{store_name}] Failed: {e}")
+
+    browser.close()
+
 if len(all_products) > 0:
     df = pd.DataFrame(all_products)
     df.to_csv("daily_menu.csv", index=False)
-    print(f"SUCCESS: Saved {len(df)} total live products to daily_menu.csv!")
+    print(f"SUCCESS: Wrote {len(df)} real live products to daily_menu.csv!")
 else:
-    print("WARNING: Zero items fetched. Cloudflare blocked endpoint.")
+    print("ERROR: No products pulled.")
