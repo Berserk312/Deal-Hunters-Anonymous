@@ -48,9 +48,23 @@ query GetFilteredProducts($storeId: ID!, $filter: FilterInput) {
 
 all_products = []
 
-# Using Chrome impersonation to bypass Cloudflare
-session = requests.Session(impersonate="chrome120")
+# Initialize session with full browser impersonation
+session = requests.Session(impersonate="chrome")
 
+# Step 1: Hit home page to obtain Cloudflare session cookies
+print("Initial connection setup...")
+try:
+    init_headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9",
+    }
+    session.get("https://dutchie.com", headers=init_headers, timeout=15)
+    time.sleep(2)
+except Exception as e:
+    print(f"Session init notice: {e}")
+
+# Step 2: Loop through stores using established session
 for store_name, store_id in STORES.items():
     variables = {
         "storeId": store_id,
@@ -58,11 +72,11 @@ for store_name, store_id in STORES.items():
     }
     
     headers = {
-        "accept": "*/*",
-        "content-type": "application/json",
-        "origin": "https://dutchie.com",
-        "referer": f"https://dutchie.com/embedded-menu/{store_id}",
-        "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        "Accept": "*/*",
+        "Content-Type": "application/json",
+        "Origin": "https://dutchie.com",
+        "Referer": f"https://dutchie.com/embedded-menu/{store_id}",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
     }
 
     try:
@@ -76,7 +90,7 @@ for store_name, store_id in STORES.items():
         if res.status_code == 200:
             data = res.json()
             products = data.get('data', {}).get('filteredProducts', []) or []
-            print(f"[{store_name}] Fetched {len(products)} products")
+            print(f"[{store_name}] Successfully fetched {len(products)} products")
             
             for p in products:
                 brand_obj = p.get('brand')
@@ -107,10 +121,10 @@ for store_name, store_id in STORES.items():
         
     time.sleep(1)
 
-# Only save if we actually pulled real store data
+# Step 3: Write out results
 if len(all_products) > 0:
     df = pd.DataFrame(all_products)
     df.to_csv("daily_menu.csv", index=False)
-    print(f"Successfully saved {len(df)} live products to daily_menu.csv")
+    print(f"SUCCESS: Saved {len(df)} live products to daily_menu.csv!")
 else:
-    print("Failed to pull live store data. File not updated.")
+    print("WARNING: Zero items fetched. File unchanged.")
