@@ -21,7 +21,9 @@ jobs:
           python-version: '3.10'
 
       - name: Install dependencies
-        run: pip install requests pandas curl_cffi
+        run: |
+          pip install pandas playwright
+          playwright install chromium --with-deps
 
       - name: Run Scraper Script
         run: python scraper.py
@@ -31,5 +33,5 @@ jobs:
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           git add daily_menu.csv
-          git commit -m "Auto-update daily menu" || exit 0
+          git commit -m "Auto-update daily menu via Playwright" || exit 0
           git push
